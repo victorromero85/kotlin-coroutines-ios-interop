@@ -1,0 +1,7 @@
+TEAM_ID=
+
+PRODUCT_NAME=Kotlin-Coroutines-Ios-Interop
+PRODUCT_BUNDLE_IDENTIFIER=org.example.kotlin_coroutines_ios_interop.Kotlin-Coroutines-Ios-Interop$(TEAM_ID)
+
+CURRENT_PROJECT_VERSION=1
+MARKETING_VERSION=1.0
