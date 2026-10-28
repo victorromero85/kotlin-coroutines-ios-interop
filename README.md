@@ -38,6 +38,35 @@ SwiftUI, and the shared module deliberately exposes no UI at all.
 For this reason `App.kt` lives in `composeApp/androidMain` rather than `commonMain`, and
 `composeApp` declares only an Android target.
 
+### A plain state-holder class, not `androidx.lifecycle.ViewModel`
+
+`ProgressBarsController` is an ordinary Kotlin class that owns a `CoroutineScope`. The lifecycle
+artifacts are multiplatform now, so extending `ViewModel` in `commonMain` and using `viewModelScope`
+would work — but `viewModelScope` cancels its children off-screen, as a side effect of a lifecycle
+callback. Cancellation propagating from parent to child is precisely what this project sets out to
+show, so it should not happen somewhere the reader cannot see.
+
+Keeping the class platform-free also means SwiftUI can hold it directly. SwiftUI has no
+`ViewModelStoreOwner` to hand out a `ViewModel`, so a shared `ViewModel` would need a platform-specific
+escape hatch on the iOS side.
+
+The name reflects this: it is a controller, not an Android `ViewModel`, and calling it one would
+mislead anyone reading the code to learn from it.
+
+**Known trade-off:** because the controller is held by `remember` rather than by a real `ViewModel`,
+rotating an Android device discards it mid-run and resets the bars. If that becomes a nuisance, a
+thin Android-only `ViewModel` wrapping the shared controller fixes it without touching `shared`.
+
+### One parent job, children launched inside it
+
+`start()` calls `scope.launch { ... }` once, and the three per-bar coroutines are launched from
+inside that parent's body. This nesting is what makes them children rather than siblings, and so it
+is what makes a single `cancel()` on the parent stop all three. Launching the three directly on
+`scope` would look almost identical and behave entirely differently.
+
+Each bar picks its own random duration so the children are visibly independent while still sharing
+one fate under cancellation.
+
 ## Build and run
 
 ```bash
