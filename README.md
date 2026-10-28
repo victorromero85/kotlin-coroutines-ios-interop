@@ -9,8 +9,6 @@ The bridge to Swift is [SKIE](https://touchlab.co/skie), which turns Kotlin `Sta
 `AsyncSequence` and `suspend` functions into `async` functions, so the iOS side reads as ordinary
 Swift concurrency rather than callback plumbing.
 
-See [PLAN.md](./PLAN.md) for what is built and what is next.
-
 ## Structure
 
 ```
