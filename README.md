@@ -1,13 +1,26 @@
 # Kotlin Coroutines / iOS Interop
 
-A Kotlin Multiplatform showcase that makes coroutine behaviour visible. Concepts like structured
-concurrency, cancellation and error propagation are usually explained with diagrams or log output;
-here they drive real UI — progress bars, live task state, cancel buttons — running natively on both
-Android and iOS.
+A Kotlin Multiplatform showcase that makes coroutine behaviour visible. Structured concurrency,
+cancellation and error propagation drive real UI (progress bars, live task state, cancel buttons)
+running natively on Android and iOS.
 
-The bridge to Swift is [SKIE](https://touchlab.co/skie), which turns Kotlin `StateFlow` into
-`AsyncSequence` and `suspend` functions into `async` functions, so the iOS side reads as ordinary
-Swift concurrency rather than callback plumbing.
+[SKIE](https://touchlab.co/skie) bridges to Swift, turning `StateFlow` into `AsyncSequence` and
+`suspend` functions into `async`, so the iOS side reads as ordinary Swift concurrency.
+
+## What it shows
+
+Each bar is a coroutine. Start launches three top-level bars; any bar can launch children, up to
+three levels deep, and can be cancelled on its own.
+
+- **Cancellation travels down, never up.** Cancelling a bar stops its subtree; its parent and
+  siblings keep running.
+- **A parent waits for its children.** A bar at 100% with running children shows *waiting for
+  children* until they finish.
+- **Nothing new joins a finished job.** Waiting, completed and cancelled bars can't add children.
+
+| Android (Compose) | iOS (SwiftUI) |
+|---|---|
+| <img src="docs/screenshots/android.png" width="360" alt="Android: nested bars running, waiting for children, completed and cancelled"> | <img src="docs/screenshots/ios.png" width="360" alt="iOS: nested bars running, waiting for children, completed and cancelled"> |
 
 ## Structure
 
@@ -17,69 +30,55 @@ composeApp/   # Android app (Jetpack Compose)
 iosApp/       # iOS app (SwiftUI, Xcode project)
 ```
 
-`shared` produces a `Shared.xcframework` that the Xcode project consumes. Business logic lives there
-in full; both UI layers are thin, observing state and calling functions on shared classes.
+`shared` produces the `Shared` framework consumed by Xcode. Both UI layers are thin: they observe
+state and call functions on shared classes.
 
 ## Architectural choices
 
-Several decisions here were made for the sake of the demonstration rather than for what would be
-most convenient in a production app. They are worth stating explicitly, since in a few cases the
-conventional choice would have quietly destroyed the thing being demonstrated.
+Some choices favour the demonstration over production convenience, because the conventional option
+would hide the thing being shown.
 
 ### Native UI on each platform, not Compose Multiplatform
 
-The Compose Multiplatform template this project grew from can render the same Compose UI on iOS.
-Doing that would remove the entire point: with Kotlin UI reading Kotlin state directly there is no
-language boundary, so nothing about interop is being shown. Android uses Compose and iOS uses
-SwiftUI, and the shared module deliberately exposes no UI at all.
+Rendering Compose on iOS would remove the language boundary, and with it the interop being
+demonstrated. Android uses Compose, iOS uses SwiftUI, and `shared` exposes no UI. That's why
+`App.kt` lives in `composeApp/androidMain` and `composeApp` has only an Android target.
 
-For this reason `App.kt` lives in `composeApp/androidMain` rather than `commonMain`, and
-`composeApp` declares only an Android target.
+### A plain state-holder class, not `ViewModel`
 
-### A plain state-holder class, not `androidx.lifecycle.ViewModel`
+`ProgressBarsController` is an ordinary class that owns its `CoroutineScope`. A shared `ViewModel`
+would work, but `viewModelScope` cancels its children off-screen in a lifecycle callback, and
+cancellation is exactly what this project wants on screen. A platform-free class also lets SwiftUI
+hold it directly, with no `ViewModelStoreOwner` workaround.
 
-`ProgressBarsController` is an ordinary Kotlin class that owns a `CoroutineScope`. The lifecycle
-artifacts are multiplatform now, so extending `ViewModel` in `commonMain` and using `viewModelScope`
-would work — but `viewModelScope` cancels its children off-screen, as a side effect of a lifecycle
-callback. Cancellation propagating from parent to child is precisely what this project sets out to
-show, so it should not happen somewhere the reader cannot see.
+**Trade-off:** Compose holds the controller with `remember`, so rotating an Android device resets the
+bars. A thin Android-only `ViewModel` wrapping the controller would fix that without touching
+`shared`.
 
-Keeping the class platform-free also means SwiftUI can hold it directly. SwiftUI has no
-`ViewModelStoreOwner` to hand out a `ViewModel`, so a shared `ViewModel` would need a platform-specific
-escape hatch on the iOS side.
+### Children launched into an existing job
 
-The name reflects this: it is a controller, not an Android `ViewModel`, and calling it one would
-mislead anyone reading the code to learn from it.
+Children are added from a button tap, outside the parent's body, so the controller keeps each bar's
+`Job` and launches with it in the context: `scope.launch(parentJob) { ... }`. Launching plainly on
+`scope` would look the same but create a sibling that survives its "parent" being cancelled.
 
-**Known trade-off:** because the controller is held by `remember` rather than by a real `ViewModel`,
-rotating an Android device discards it mid-run and resets the bars. If that becomes a nuisance, a
-thin Android-only `ViewModel` wrapping the shared controller fixes it without touching `shared`.
+The top-level bars hang off a plain `Job` that `start()` marks with `complete()`: nothing left to do
+itself, finish once the children have. That's the same *completing* state bars show as *waiting for
+children*, and it lets Cancel all stop everything with one `cancel()`. Each bar's final status comes
+from `invokeOnCompletion`, which only fires once its whole subtree has finished.
 
-### One parent job, children launched inside it
-
-`start()` calls `scope.launch { ... }` once, and the three per-bar coroutines are launched from
-inside that parent's body. This nesting is what makes them children rather than siblings, and so it
-is what makes a single `cancel()` on the parent stop all three. Launching the three directly on
-`scope` would look almost identical and behave entirely differently.
-
-Each bar picks its own random duration so the children are visibly independent while still sharing
-one fate under cancellation.
+Bars form a tree but are exposed as a flat, depth-first list with a `depth` per bar, which both
+`LazyColumn` and `ForEach` render directly and SKIE bridges without a recursive type.
 
 ## Build and run
 
+Gradle needs JDK 17+ (Android Studio's bundled JDK works).
+
 ```bash
-# Android debug APK
-./gradlew :composeApp:assembleDebug
-
-# All tests
-./gradlew test
-
-# Shared module tests only
-./gradlew :shared:test
-
-# iOS framework — rebuild after any change to shared/
-./gradlew :shared:assembleSharedReleaseXCFramework
+./gradlew :composeApp:assembleDebug   # Android debug APK
+./gradlew test                        # all tests
+./gradlew :shared:test                # shared module tests only
 ```
 
-For iOS, open `iosApp/iosApp.xcodeproj` in Xcode and run from there, rebuilding the framework first
-whenever `shared` has changed.
+For iOS, open `iosApp/iosApp.xcodeproj` in Xcode and run; its build phase rebuilds `shared` through
+Gradle. That phase uses the `JAVA_HOME` macOS gives GUI apps, not your shell's, so if it points at an
+older JDK run `launchctl setenv JAVA_HOME <jdk-17+-home>` and restart Xcode.
